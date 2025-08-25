@@ -1,122 +1,70 @@
-FROM ubuntu:24.04
+# ---- Base with Node 20 on Debian bookworm (Python 3.11 available) ----
+FROM node:20-bookworm AS base
 
-# Set local build to true if using local github repo to build the image
-ARG LOCAL_BUILD=false
-ENV LOCAL_BUILD=${LOCAL_BUILD}
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_AUDIT=false
 
-# Set environment variables
-ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
-ENV NODE_VERSION=20.19.2
-ENV NPM_VERSION=10.8.2
-
-# Update system and install basic dependencies
-RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    wget \
-    build-essential \
-    software-properties-common \
-    ca-certificates \
-    gnupg \
-    lsb-release \
+# Minimal apt; no PPAs, use Debian's Python 3.11
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3 \
+      python3-venv \
+      python3-dev \
+      python3-pip \
+      curl ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python 3.11
-RUN add-apt-repository ppa:deadsnakes/ppa -y && \
-    apt-get update && \
-    apt-get install -y \
-    python3.11 \
-    python3.11-venv \
-    python3.11-dev \
-    python3-pip \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Node.js v20.19.2 and npm 10.8.2
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
-    npm install -g npm@${NPM_VERSION}
-
-# Verify Node.js and npm versions
-RUN node --version && npm --version
-
-# Set working directory
 WORKDIR /app
 
-# Add cache busting argument to force git clone to always run
-ARG CACHEBUST=1
-
-# Copy local files (will be used if LOCAL_BUILD is true)
+# Copy repo (Railway will build from your GitHub)
 COPY . /app/traceroot
 
-# Clone repositories if not local build (this will replace the copied files)
-RUN if [ "$LOCAL_BUILD" = "false" ]; then \
-        rm -rf /app/traceroot && \
-        git clone https://github.com/traceroot-ai/traceroot.git; \
-    fi
+# Remove any EE folders
+RUN find /app/traceroot -type d -name "ee" -prune -exec rm -rf {} +
 
-# Change to traceroot directory
+# ---- Build Python deps in a venv ----
 WORKDIR /app/traceroot
+RUN python3 -m venv venv \
+ && . venv/bin/activate \
+ && pip install --upgrade pip \
+ && pip install .
 
-# Remove all ee folders recursively
-RUN find /app/traceroot -type d -name "ee" -exec rm -rf {} +
-
-# Remove existing venv directory if it exists (from local copy)
-RUN rm -rf venv
-
-# Create Python virtual environment
-RUN python3.11 -m venv venv
-
-# Activate virtual environment and install Python dependencies
-RUN /bin/bash -c "source venv/bin/activate && \
-    pip install pip --upgrade && \
-    pip install ."
-
-# Change to ui directory and install npm dependencies
+# ---- Build the Next.js UI ----
 WORKDIR /app/traceroot/ui
+# If you have a package-lock.json, this will leverage caching better:
+# COPY traceroot/ui/package*.json ./
+# RUN npm ci
 RUN npm install
+RUN npm run build
 
-# Set final working directory back to traceroot
+# ---- Runtime image ----
+# (You can stay on the same image to keep it simple)
 WORKDIR /app/traceroot
+ENV PATH="/app/traceroot/venv/bin:${PATH}"
 
-# Required environment variables
+# Required env (tune in Railway)
+ENV PORT=3000
+ENV NEXT_PUBLIC_APP_URL="http://localhost:3000"
+ENV REST_API_ENDPOINT="http://localhost:8000"
+ENV NEXT_PUBLIC_REST_API_ENDPOINT="/api"
+ENV REST_LOCAL_MODE=false
+ENV NEXT_PUBLIC_LOCAL_MODE=false
+ENV JAEGER_URL=""
 ENV DB_NAME=traceroot
 ENV DB_CHAT_COLLECTION=agent_chat
 ENV DB_CHAT_METADATA_COLLECTION=chat_metadata
 ENV DB_CONNECTION_TOKENS_COLLECTION=connection_tokens
 ENV DB_TRACEROOT_TOKENS_COLLECTION=traceroot_tokens
-ENV OPENAI_API_KEY=""
-ENV DB_PASSWORD=""
 ENV DB_USER_NAME=traceroot
+ENV DB_PASSWORD=""
 
-# AWS Cognito environment variables (required for traceroot-auth)
-ENV COGNITO_CLIENT_ID=""
-ENV COGNITO_ISSUER=""
-ENV NEXT_PUBLIC_COGNITO_CLIENT_ID=""
-ENV COGNITO_CLIENT_SECRET=""
-ENV NEXT_PUBLIC_AWS_REGION="us-west-2"
-ENV COGNITO_USER_POOL_ID=""
-ENV NEXTAUTH_URL=""
-ENV NEXTAUTH_SECRET=""
-ENV NEXT_PUBLIC_DEV=""
-
-# Required environment variables for ui
-ENV NEXT_PUBLIC_APP_URL="http://localhost:3000"
-ENV REST_API_ENDPOINT="http://localhost:8000"
-ENV NEXT_PUBLIC_REST_API_ENDPOINT="http://localhost:8000"
-ENV JAEGER_URL="http://host.docker.internal:16686"
-
-# Set local mode to true
-ENV REST_LOCAL_MODE=true
-ENV NEXT_PUBLIC_LOCAL_MODE=true
-
-# Expose ports
+# Expose both ports (Railway will publish only PORT)
 EXPOSE 3000 8000
 
-# Copy and use the startup script
+# Add your start script
 COPY docker/public/start.sh /app/start.sh
-# Make startup script executable
 RUN chmod +x /app/start.sh
 
-# Default command runs the startup script
 CMD ["/app/start.sh"]
