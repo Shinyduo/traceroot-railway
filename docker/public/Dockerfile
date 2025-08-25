@@ -33,15 +33,13 @@ RUN python3 -m venv venv \
 # ---- Build the Next.js UI ----
 WORKDIR /app/traceroot/ui
 
-# Ensure dev deps are present for Tailwind/PostCSS/Next build
-# Use npm ci if lockfile exists, else npm install
-ENV NODE_ENV=development
-RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
+# Keep NODE_ENV=production (standard) but explicitly include dev deps for Tailwind/PostCSS/Next build
+RUN if [ -f package-lock.json ]; then npm ci --include=dev; else npm install --include=dev; fi
 
-# Ensure Tailwind/PostCSS deps exist (no-op if already in package.json)
+# Ensure Tailwind/PostCSS deps exist (no-op if already listed)
 RUN npm i -D tailwindcss postcss autoprefixer @tailwindcss/postcss || true
 
-# Build UI (expects next.config.(js|ts) with /api rewrite)
+# Build the UI (uses next.config.(js|ts) with /api rewrite)
 RUN npm run build
 
 # ---- Final runtime ----
