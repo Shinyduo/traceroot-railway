@@ -17,8 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy the entire repository into the image (Railway builds from GitHub)
-# Build context MUST be the repo root for this to work.
+# Copy the entire repository (build context must be repo root)
 COPY . /app/traceroot
 
 # Remove any enterprise ("ee") directories if present (optional)
@@ -34,27 +33,30 @@ RUN python3 -m venv venv \
 # ---- Build the Next.js UI ----
 WORKDIR /app/traceroot/ui
 
-# If you have a lockfile, npm ci is faster & reproducible; otherwise fallback to npm i
-# We'll attempt npm ci, and fallback to npm install if no lockfile exists.
-RUN if [ -f package-lock.json ]; then npm ci --omit=dev=false; else npm install; fi
+# Ensure dev deps are present for Tailwind/PostCSS/Next build
+# Use npm ci if lockfile exists, else npm install
+ENV NODE_ENV=development
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-# Ensure your next.config.* is in place (with /api rewrite to localhost:8000)
+# Ensure Tailwind/PostCSS deps exist (no-op if already in package.json)
+RUN npm i -D tailwindcss postcss autoprefixer @tailwindcss/postcss || true
+
+# Build UI (expects next.config.(js|ts) with /api rewrite)
 RUN npm run build
 
 # ---- Final runtime ----
-# (Using same base to keep it simple; you could create a slimmer runtime stage if needed)
 WORKDIR /app/traceroot
-ENV PATH="/app/traceroot/venv/bin:${PATH}"
+ENV PATH="/app/traceroot/venv/bin:${PATH}" \
+    NODE_ENV=production
 
 # ---- Runtime env defaults (override in Railway Variables) ----
 ENV PORT=3000
 ENV NEXT_PUBLIC_APP_URL="http://localhost:3000"
-# UI will call FastAPI via Next.js rewrite on the same domain:
+# UI calls FastAPI via Next.js rewrite on the same domain:
 ENV NEXT_PUBLIC_REST_API_ENDPOINT="/api"
 ENV NEXT_PUBLIC_AUTH_ENDPOINT="/api"
 # Server-side internal API URL:
 ENV REST_API_ENDPOINT="http://localhost:8000"
-
 ENV REST_LOCAL_MODE=false
 ENV NEXT_PUBLIC_LOCAL_MODE=false
 
@@ -71,7 +73,7 @@ ENV DB_PASSWORD=""
 # Expose both ports (Railway only publishes PORT)
 EXPOSE 3000 8000
 
-# Copy start script (path valid because build context is repo root)
+# Start script path is relative to repo root (since build context is repo root)
 COPY docker/public/start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
