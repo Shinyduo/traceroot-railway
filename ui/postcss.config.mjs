@@ -1,7 +1,7 @@
-// Next 15-style
-module.exports = {
+// ui/postcss.config.mjs
+export default {
   plugins: {
-    '@tailwindcss/postcss': {},
+    '@tailwindcss/postcss': {},  // or: tailwindcss: {}
     autoprefixer: {},
   },
 }
